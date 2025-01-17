@@ -45,10 +45,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm");
 
     private static final List<TemplateInfo> TEMPLATES = Arrays.asList(
-            new TemplateInfo("Shablon 1", "https://constructor.e-taklif.uz/storage/shablon_images/1729248902_52Bw1.webp"),
-            new TemplateInfo("Shablon 2", "https://constructor.e-taklif.uz/storage/shablon_images/1729248902_52Bw1.webp"),
-            new TemplateInfo("Shablon 3", "https://constructor.e-taklif.uz/storage/shablon_images/1729248902_52Bw1.webp"),
-            new TemplateInfo("Shablon 4", "https://constructor.e-taklif.uz/storage/shablon_images/1729248902_52Bw1.webp")
+            new TemplateInfo("Shablon 1", "http://localhost:9090/api/v1/file/file-preview/KjyZGM")
     );
 
     private static class TemplateInfo {
@@ -139,6 +136,11 @@ public class TelegramBot extends TelegramLongPollingBot {
                 break;
             case "ENTER_KELIN_ISMI":
                 taklifnoma.setKelinIsmi(messageText);
+                userStates.put(chatId, "ENTER_TAKLIF_QILUVCHI_ISMI");
+                sendMessage(chatId, "Taklif qiluvchi ismini kiriting:");
+                break;
+            case "ENTER_TAKLIF_QILUVCHI_ISMI":
+                taklifnoma.setTaklifQiluvchiIsmi(messageText);
                 userStates.put(chatId, "ENTER_MANZIL");
                 sendMessage(chatId, "To'y manzilini kiriting:");
                 break;
@@ -154,7 +156,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                 if (messageText.equalsIgnoreCase("Ha")) {
                     taklifnoma.setAyollarToyOshi(true);
                     userStates.put(chatId, "AYOLLAR_TOY_OSHI_VAQTI");
-                    sendMessage(chatId, "Ayollar to'y oshi vaqtini kiriting (14:00:mm formatida):");
+                    sendMessage(chatId, "Ayollar to'y oshi vaqtini kiriting (14:00 formatida):");
                 } else {
                     taklifnoma.setAyollarToyOshi(false);
                     userStates.put(chatId, "ERKAKLAR_TOY_OSHI");
@@ -325,7 +327,6 @@ public class TelegramBot extends TelegramLongPollingBot {
         List<KeyboardRow> keyboard = new ArrayList<>();
         KeyboardRow row = new KeyboardRow();
         row.add("To'y");
-        row.add("Tug'ilgan kun");
         keyboard.add(row);
         keyboardMarkup.setKeyboard(keyboard);
         keyboardMarkup.setResizeKeyboard(true);
@@ -404,6 +405,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                         "Template: %s\n" +
                         "Kuyov ismi: %s\n" +
                         "Kelin ismi: %s\n" +
+                        "Taklif qiluvchi: %s\n" +
                         "Manzil: %s\n" +
                         "Lokatsiya: %.6f, %.6f\n" +
                         "Ayollar to'y oshi: %s\n" +
@@ -415,6 +417,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                 taklifnoma.getTemplate(),
                 taklifnoma.getKuyovIsmi(),
                 taklifnoma.getKelinIsmi(),
+                taklifnoma.getTaklifQiluvchiIsmi(),
                 taklifnoma.getManzil(),
                 taklifnoma.getLongitude(),
                 taklifnoma.getLatitude(),
