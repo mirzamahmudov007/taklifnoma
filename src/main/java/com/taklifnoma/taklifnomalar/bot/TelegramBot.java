@@ -45,7 +45,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm");
 
     private static final List<TemplateInfo> TEMPLATES = Arrays.asList(
-            new TemplateInfo("Shablon 1", "http://137.184.135.3:9090/api/v1/file/file-preview/Vj84jo")
+            new TemplateInfo("Shablon 1", "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTZFsMo-w00y09aJykeWkXo7Nxudybu1fWKMQ&s")
     );
 
     private static class TemplateInfo {
