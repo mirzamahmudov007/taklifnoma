@@ -10,6 +10,7 @@ import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.GetFile;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.send.SendPhoto;
+import org.telegram.telegrambots.meta.api.methods.send.SendSticker;
 import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.api.objects.PhotoSize;
 import org.telegram.telegrambots.meta.api.objects.Update;
@@ -45,7 +46,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm");
 
     private static final List<TemplateInfo> TEMPLATES = Arrays.asList(
-            new TemplateInfo("Shablon 1", "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTZFsMo-w00y09aJykeWkXo7Nxudybu1fWKMQ&s")
+            new TemplateInfo("Shablon 1", "http://137.184.135.3:9090/api/v1/file/file-preview/4j7PG3")
     );
 
     private static class TemplateInfo {
@@ -126,6 +127,11 @@ public class TelegramBot extends TelegramLongPollingBot {
                 break;
             case "ENTER_TEMPLATE":
                 taklifnoma.setTemplate(messageText);
+                userStates.put(chatId, "ENTER_TAKLIF_QILUVCHI_ISMI");
+                sendMessage(chatId, "Taklif qiluvchi ismini kiriting:");
+                break;
+            case "ENTER_TAKLIF_QILUVCHI_ISMI":
+                taklifnoma.setTaklifQiluvchiIsmi(messageText);
                 userStates.put(chatId, "ENTER_KUYOV_ISMI");
                 sendMessage(chatId, "Kuyov ismini kiriting:");
                 break;
@@ -136,11 +142,6 @@ public class TelegramBot extends TelegramLongPollingBot {
                 break;
             case "ENTER_KELIN_ISMI":
                 taklifnoma.setKelinIsmi(messageText);
-                userStates.put(chatId, "ENTER_TAKLIF_QILUVCHI_ISMI");
-                sendMessage(chatId, "Taklif qiluvchi ismini kiriting:");
-                break;
-            case "ENTER_TAKLIF_QILUVCHI_ISMI":
-                taklifnoma.setTaklifQiluvchiIsmi(messageText);
                 userStates.put(chatId, "ENTER_MANZIL");
                 sendMessage(chatId, "To'y manzilini kiriting:");
                 break;
@@ -335,6 +336,9 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private void sendTemplatesWithPreviews(long chatId) {
+        sendMessage(chatId, "Taklifnoma shablonlari yuklanmoqda...");
+        sendSticker(chatId, "CAACAgIAAxkBAAEJL9FkZM_6AAFPYl8AAcj8OhleerkIigkAAnwLAAIYM-QI5Vrx7f-zKvovBA");
+
         sendMessage(chatId, "Taklifnoma shablonini tanlang:", createTemplateKeyboard());
 
         for (TemplateInfo template : TEMPLATES) {
@@ -348,6 +352,17 @@ public class TelegramBot extends TelegramLongPollingBot {
                 e.printStackTrace();
                 sendMessage(chatId, "Shablon rasmini yuklashda xatolik: " + template.getName() + ". Xato: " + e.getMessage());
             }
+        }
+    }
+
+    private void sendSticker(long chatId, String stickerId) {
+        SendSticker sendSticker = new SendSticker();
+        sendSticker.setChatId(String.valueOf(chatId));
+        sendSticker.setSticker(new InputFile(stickerId));
+        try {
+            execute(sendSticker);
+        } catch (TelegramApiException e) {
+            e.printStackTrace();
         }
     }
 
@@ -430,4 +445,3 @@ public class TelegramBot extends TelegramLongPollingBot {
         sendMessage(chatId, confirmationMessage, createConfirmKeyboard());
     }
 }
-
