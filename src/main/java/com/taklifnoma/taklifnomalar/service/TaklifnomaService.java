@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
@@ -34,5 +35,11 @@ public class TaklifnomaService {
         dto.setType(taklifnoma.getType());
         dto.setStatus(taklifnoma.getStatus());
         return dto;
+    }
+
+    public Taklifnoma update(Long id , String status) {
+        Optional<Taklifnoma> taklifnoma = taklifnomaRepository.findById(id);
+        taklifnoma.get().setStatus(Taklifnoma.TaklifnomaStatus.valueOf(status));
+        return  taklifnomaRepository.save(taklifnoma.get());
     }
 }
