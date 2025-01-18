@@ -83,6 +83,56 @@ public class FileStorageService {
         return fileStorage;
     }
 
+    public FileStorage saves(String fileName, byte[] fileData, String contentType) {
+        try {
+            FileStorage fileStorage = new FileStorage();
+            fileStorage.setName(fileName);
+            fileStorage.setFileSize((long) fileData.length);
+            fileStorage.setContentType(contentType);
+            fileStorage.setFileStorageStatus(FileStorageStatus.DRAFT);
+            fileStorage.setExtension(getExtension(fileName));
+            fileStorage = fileStorageRepository.save(fileStorage);
+
+            Date now = new Date();
+
+            // Create directory structure
+            String path = String.format("%s/upload_files/%d/%d/%d/",
+                    this.serverFolderPath,
+                    1900 + now.getYear(),
+                    1 + now.getMonth(),
+                    now.getDate());
+
+            File uploadFolder = new File(path);
+            if (!uploadFolder.exists() && uploadFolder.mkdirs()) {
+                System.out.println("Folder created");
+            }
+
+            // Generate hashId
+            fileStorage.setHashId(hashids.encode(fileStorage.getId()));
+
+            // Create relative path
+            String pathLocal = String.format("/upload_files/%d/%d/%d/%s.%s",
+                    1900 + now.getYear(),
+                    1 + now.getMonth(),
+                    now.getDate(),
+                    fileStorage.getHashId(),
+                    fileStorage.getExtension());
+
+            fileStorage.setUploadFolder(pathLocal);
+            fileStorage = fileStorageRepository.save(fileStorage);
+
+            // Save actual file
+            File file = new File(uploadFolder.getAbsolutePath(),
+                    String.format("%s.%s", fileStorage.getHashId(), fileStorage.getExtension()));
+
+            Files.write(file.toPath(), fileData);
+
+            return fileStorage;
+        } catch (IOException e) {
+            e.printStackTrace();
+            throw new RuntimeException("Failed to save file: " + e.getMessage());
+        }
+    }
     public String save(String fileName, byte[] fileData, String contentType) {
         try {
             FileStorage fileStorage = new FileStorage();

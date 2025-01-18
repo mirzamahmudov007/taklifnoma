@@ -1,5 +1,6 @@
 package com.taklifnoma.taklifnomalar.bot;
 
+import com.taklifnoma.taklifnomalar.entity.FileStorage;
 import com.taklifnoma.taklifnomalar.entity.Taklifnoma;
 import com.taklifnoma.taklifnomalar.repository.TaklifnomaRepository;
 import com.taklifnoma.taklifnomalar.service.FileStorageService;
@@ -325,10 +326,10 @@ public class TelegramBot extends TelegramLongPollingBot {
                 String fileName = "payment_" + chatId + "_" + System.currentTimeMillis() + ".jpg";
 
                 // Save file using FileStorageService
-                String savedFilePath = fileStorageService.save(fileName, imageBytes, "image/jpeg");
+                FileStorage savedFile = fileStorageService.saves(fileName, imageBytes, "image/jpeg");
 
-                // Update taklifnoma with the saved file path
-                taklifnoma.setPaymentReceiptPath(savedFilePath);
+                // Update taklifnoma with the saved file's hashId
+                taklifnoma.setPaymentReceiptPath(savedFile.getHashId());
                 userSessions.put(chatId, taklifnoma);
 
                 // Move to confirmation state
@@ -341,7 +342,6 @@ public class TelegramBot extends TelegramLongPollingBot {
             }
         }
     }
-
     private void requestPayment(long chatId) {
         sendMessage(chatId, "Buyurtmani tasdiqlash uchun, iltimos, quyidagi kartaga 20000 so'm o'tkazing:\n" +
                 "\n" +
