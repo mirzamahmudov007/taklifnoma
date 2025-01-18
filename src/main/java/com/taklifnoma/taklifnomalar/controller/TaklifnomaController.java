@@ -22,6 +22,7 @@ public class TaklifnomaController {
         List<TaklifnomaDTO> taklifnomalar = taklifnomaService.getAllTaklifnomalar();
         return ResponseEntity.ok(taklifnomalar);
     }
+
     @GetMapping("/get")
     public ResponseEntity<List<Taklifnoma>> getAllr() {
         List<Taklifnoma> taklifnomalar = taklifnomaService.getAll();

@@ -7,43 +7,31 @@ import com.taklifnoma.taklifnomalar.service.FileStorageService;
 import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.GetFile;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.send.SendPhoto;
-import org.telegram.telegrambots.meta.api.methods.send.SendSticker;
-import org.telegram.telegrambots.meta.api.objects.InputFile;
-import org.telegram.telegrambots.meta.api.objects.PhotoSize;
-import org.telegram.telegrambots.meta.api.objects.Update;
+import org.telegram.telegrambots.meta.api.objects.*;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.RandomAccessFile;
-import java.nio.channels.FileLock;
-import java.io.InputStream;
+import java.io.*;
 import java.net.URL;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Component
-@Scope("singleton")
 public class TelegramBot extends TelegramLongPollingBot {
 
-    private static final String LOCK_FILE = "bot.lock";
-    private RandomAccessFile lockFile;
-    private FileLock lock;
+    private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm");
+    private final Map<Long, UserSession> userSessions = new ConcurrentHashMap<>();
 
     @Value("${bot.username}")
     private String botUsername;
@@ -57,76 +45,6 @@ public class TelegramBot extends TelegramLongPollingBot {
     @Autowired
     private FileStorageService fileStorageService;
 
-    private Map<Long, String> userStates = new HashMap<>();
-    private Map<Long, Taklifnoma> userSessions = new HashMap<>();
-
-    private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm");
-
-    private final ExecutorService executorService = Executors.newFixedThreadPool(5);
-    private static final List<TemplateInfo> TEMPLATES = Arrays.asList(
-            new TemplateInfo("Shablon 1", "https://e-taklifnoma.uz/images/design/design1.png"),
-            new TemplateInfo("Shablon 2", "https://e-taklifnoma.uz/images/design/design2.png"),
-            new TemplateInfo("Shablon 3", "https://e-taklifnoma.uz/images/design/design3.png")
-    );
-
-    public TelegramBot() {
-        try {
-            lockFile = new RandomAccessFile(LOCK_FILE, "rw");
-            lock = lockFile.getChannel().tryLock();
-            if (lock == null) {
-                System.out.println("Boshqa nusxa allaqachon ishga tushirilgan. Chiqilmoqda.");
-                System.exit(1);
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-            System.exit(1);
-        }
-    }
-    @PreDestroy
-    public void onDestroy() {
-        try {
-            if (lock != null) {
-                lock.release();
-            }
-            if (lockFile != null) {
-                lockFile.close();
-            }
-            new File(LOCK_FILE).delete();
-            executorService.shutdown();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-    private static class TemplateInfo {
-        private final String name;
-        private final String previewUrl;
-
-        public TemplateInfo(String name, String previewUrl) {
-            this.name = name;
-            if (!isValidUrl(previewUrl)) {
-                throw new IllegalArgumentException("Noto'g'ri URL: " + previewUrl);
-            }
-            this.previewUrl = previewUrl;
-        }
-
-        public String getName() {
-            return name;
-        }
-
-        public String getPreviewUrl() {
-            return previewUrl;
-        }
-
-        private boolean isValidUrl(String url) {
-            try {
-                new URL(url).toURI();
-                return true;
-            } catch (Exception e) {
-                return false;
-            }
-        }
-    }
-
     @Override
     public String getBotUsername() {
         return botUsername;
@@ -137,226 +55,303 @@ public class TelegramBot extends TelegramLongPollingBot {
         return botToken;
     }
 
-
     @Override
     public void onUpdateReceived(Update update) {
-        if (update.hasMessage() && update.getMessage().hasText()) {
-            long chatId = update.getMessage().getChatId();
-            String messageText = update.getMessage().getText();
-
-            if ("/start".equals(messageText)) {
-                startCommand(chatId);
-            } else {
-                processUserInput(chatId, messageText);
+        try {
+            if (update.hasMessage()) {
+                handleMessage(update.getMessage());
+            } else if (update.hasCallbackQuery()) {
+                handleCallbackQuery(update.getCallbackQuery());
             }
-        } else if (update.hasMessage() && update.getMessage().hasLocation()) {
-            long chatId = update.getMessage().getChatId();
-            processLocation(chatId, update.getMessage().getLocation());
-        } else if (update.hasMessage() && update.getMessage().hasPhoto()) {
-            long chatId = update.getMessage().getChatId();
-            processPhoto(chatId, update.getMessage().getPhoto());
-        } else if (update.hasCallbackQuery()) {
-            String callbackData = update.getCallbackQuery().getData();
-            long chatId = update.getCallbackQuery().getMessage().getChatId();
-
-            if (callbackData.startsWith("select_template:")) {
-                String selectedTemplate = callbackData.split(":")[1];
-                Taklifnoma taklifnoma = userSessions.getOrDefault(chatId, new Taklifnoma());
-                taklifnoma.setTemplate(selectedTemplate);
-                userSessions.put(chatId, taklifnoma);
-                userStates.put(chatId, "ENTER_TAKLIF_QILUVCHI_ISMI");
-                sendMessage(chatId, "Taklifnoma kimni nomidan beriladi \uD83D\uDDE3 (ISM Familiyasini kiriting): ");
-            }
+        } catch (Exception e) {
+            e.printStackTrace();
         }
     }
-    private void startCommand(long chatId) {
-        userStates.put(chatId, "ENTER_TYPE");
-        userSessions.put(chatId, new Taklifnoma());
-        sendMessage(chatId, "Taklifnoma turini tanlang:", createTypeKeyboard());
+
+    private void handleMessage(Message message) {
+        long chatId = message.getChatId();
+        UserSession session = userSessions.computeIfAbsent(chatId, k -> new UserSession());
+
+        if (message.hasText()) {
+            String text = message.getText();
+            if ("/start".equals(text)) {
+                startCommand(chatId);
+            } else {
+                handleTextMessage(chatId, text, session);
+            }
+        } else if (message.hasLocation()) {
+            handleLocation(chatId, message.getLocation(), session);
+        } else if (message.hasPhoto()) {
+            handlePhoto(chatId, message.getPhoto(), session);
+        }
     }
 
-    private void processUserInput(long chatId, String messageText) {
-        String currentState = userStates.getOrDefault(chatId, "");
-        Taklifnoma taklifnoma = userSessions.getOrDefault(chatId, new Taklifnoma());
-
-        switch (currentState) {
-            case "ENTER_TYPE":
-                taklifnoma.setType(messageText);
-                userStates.put(chatId, "ENTER_TEMPLATE");
-                sendTemplatesWithPreviews(chatId);
+    private void handleTextMessage(long chatId, String text, UserSession session) {
+        switch (session.getState()) {
+            case START:
+            case AWAITING_TYPE:
+                handleTypeSelection(chatId, text, session);
                 break;
-            case "ENTER_TEMPLATE":
-                taklifnoma.setTemplate(messageText);
-                userStates.put(chatId, "ENTER_TAKLIF_QILUVCHI_ISMI");
-                sendMessage(chatId, "Taklif qiluvchi ismini kiriting:");
+            case AWAITING_TEMPLATE:
+                handleTemplateSelection(chatId, text, session);
                 break;
-            case "ENTER_TAKLIF_QILUVCHI_ISMI":
-                taklifnoma.setTaklifQiluvchiIsmi(messageText);
-                userStates.put(chatId, "ENTER_KUYOV_ISMI");
-                sendMessage(chatId, "Kuyov ismini kiriting \uD83E\uDDD1\uD83C\uDFFC\u200D⚖\uFE0F:");
+            case AWAITING_KUYOV_ISMI:
+                session.getTaklifnoma().setKuyovIsmi(text);
+                session.setState(BotState.AWAITING_KELIN_ISMI);
+                askQuestion(chatId, "Kelin ismini kiriting:");
                 break;
-            case "ENTER_KUYOV_ISMI":
-                taklifnoma.setKuyovIsmi(messageText);
-                userStates.put(chatId, "ENTER_KELIN_ISMI");
-                sendMessage(chatId, "Kelin ismini(to'liq) kiriting \uD83D\uDC70\u200D♀\uFE0F:");
+            case AWAITING_KELIN_ISMI:
+                session.getTaklifnoma().setKelinIsmi(text);
+                session.setState(BotState.AWAITING_MANZIL);
+                askQuestion(chatId, "To'yxona manzilini kiriting:");
                 break;
-            case "ENTER_KELIN_ISMI":
-                taklifnoma.setKelinIsmi(messageText);
-                userStates.put(chatId, "ENTER_MANZIL");
-                sendMessage(chatId, "To'yxona manzilini kiriting (Masalan: Toshkent Yakkasaroy to'yxonasi):");
+            case AWAITING_MANZIL:
+                session.getTaklifnoma().setManzil(text);
+                session.setState(BotState.AWAITING_LOCATION);
+                askQuestion(chatId, "Lokatsiyani yuboring:");
                 break;
-            case "ENTER_MANZIL":
-                taklifnoma.setManzil(messageText);
-                userStates.put(chatId, "ENTER_LOCATION");
-                sendMessage(chatId, "Lokatsiyani yuboring (Telegram location):");
+            case AWAITING_LOCATION:
+                // Skip - handled by location handler
                 break;
-            case "ENTER_LOCATION":
-                // This case will be handled in processLocation method
+            case AWAITING_AYOLLAR_TOSH:
+                handleYesNoAnswer(chatId, text, session, true);
                 break;
-            case "AYOLLAR_TOY_OSHI":
-                if (messageText.equalsIgnoreCase("Ha")) {
-                    taklifnoma.setAyollarToyOshi(true);
-                    userStates.put(chatId, "AYOLLAR_TOY_OSHI_VAQTI");
-                    sendMessage(chatId, "Ayollar to'y oshi vaqtini kiriting (14:00 formatida) ⌚\uFE0F:");
-                } else {
-                    taklifnoma.setAyollarToyOshi(false);
-                    userStates.put(chatId, "ERKAKLAR_TOY_OSHI");
-                    sendMessage(chatId, "Erkaklar uchun to'y oshi bormi❓", createYesNoKeyboard());
-                }
+            case AWAITING_ERKAKLAR_TOSH:
+                handleYesNoAnswer(chatId, text, session, false);
                 break;
-            case "AYOLLAR_TOY_OSHI_VAQTI":
-                try {
-                    LocalTime ayollarToyOshiVaqti = LocalTime.parse(messageText, TIME_FORMATTER);
-                    taklifnoma.setAyollarToyOshiVaqti(ayollarToyOshiVaqti);
-                    userStates.put(chatId, "ERKAKLAR_TOY_OSHI");
-                    sendMessage(chatId, "Erkaklar uchun to'y oshi bormi❓", createYesNoKeyboard());
-                } catch (DateTimeParseException e) {
-                    sendMessage(chatId, "Noto'g'ri vaqt formati. Iltimos, vaqtni HH:mm formatida kiriting (masalan, 14:30) ⌚\uFE0F:");
-                }
+            case AWAITING_NIKOH_VAQTI:
+                handleTimeInput(chatId, text, session, true);
                 break;
-            case "ERKAKLAR_TOY_OSHI":
-                if (messageText.equalsIgnoreCase("Ha")) {
-                    taklifnoma.setErkaklarToyOshi(true);
-                    userStates.put(chatId, "ERKAKLAR_TOY_OSHI_VAQTI");
-                    sendMessage(chatId, "Erkaklar to'y oshi vaqtini kiriting (HH:mm formatida) ⌚\uFE0F:");
-                } else {
-                    taklifnoma.setErkaklarToyOshi(false);
-                    userStates.put(chatId, "NIKOH_VAQTI");
-                    sendMessage(chatId, "Nikoh vaqtini kiriting (14:00 formatida) ⌚\uFE0F:");
-                }
+            case AWAITING_TUGILGAN_KUN_EGASI:
+                session.getTaklifnoma().setTugulganKunEgasi(text);
+                session.setState(BotState.AWAITING_YOSH);
+                askQuestion(chatId, "Necha yoshga to'layotganini kiriting:");
                 break;
-            case "ERKAKLAR_TOY_OSHI_VAQTI":
-                try {
-                    LocalTime erkaklarToyOshiVaqti = LocalTime.parse(messageText, TIME_FORMATTER);
-                    taklifnoma.setErkaklarToyOshiVaqti(erkaklarToyOshiVaqti);
-                    userStates.put(chatId, "NIKOH_VAQTI");
-                    sendMessage(chatId, "Nikoh vaqtini kiriting HH:mm formatida (masalan: 14:00) ⌚\uFE0F:");
-                } catch (DateTimeParseException e) {
-                    sendMessage(chatId, "Noto'g'ri vaqt formati. Iltimos, vaqtni HH:mm formatida kiriting (masalan, 14:30):");
-                }
+            case AWAITING_YOSH:
+                handleAgeInput(chatId, text, session);
                 break;
-            case "NIKOH_VAQTI":
-                try {
-                    LocalTime nikohVaqti = LocalTime.parse(messageText, TIME_FORMATTER);
-                    taklifnoma.setNikohVaqti(nikohVaqti);
-                    userStates.put(chatId, "REQUEST_PAYMENT");
-                    requestPayment(chatId);
-                } catch (DateTimeParseException e) {
-                    sendMessage(chatId, "Noto'g'ri vaqt formati. Iltimos, vaqtni HH:mm formatida kiriting (masalan, 14:30):");
-                }
+            case AWAITING_TADBIR_VAQTI:
+                handleTimeInput(chatId, text, session, false);
                 break;
-            case "REQUEST_PAYMENT":
-                // This case will be handled in processPhoto method
+            case AWAITING_TABRIK_MATNI:
+                session.getTaklifnoma().setTabrikMatni(text);
+                requestPayment(chatId, session);
                 break;
-            case "CONFIRM":
-                if (messageText.equalsIgnoreCase("Tasdiqlash")) {
-                    saveTaklifnoma(chatId);
-                } else {
-                    sendMessage(chatId, "Buyurtma bekor qilindi. Qaytadan boshlash uchun /start buyrug'ini yuboring.");
-                    userStates.remove(chatId);
-                    userSessions.remove(chatId);
-                }
+            case AWAITING_CONFIRMATION:
+                handleConfirmation(chatId, text, session);
                 break;
             default:
                 sendMessage(chatId, "Noma'lum buyruq. Iltimos, /start buyrug'ini yuboring.");
         }
-
-        userSessions.put(chatId, taklifnoma);
     }
 
-    private void processLocation(long chatId, org.telegram.telegrambots.meta.api.objects.Location location) {
-        String currentState = userStates.getOrDefault(chatId, "");
-        if ("ENTER_LOCATION".equals(currentState)) {
-            Taklifnoma taklifnoma = userSessions.getOrDefault(chatId, new Taklifnoma());
-            taklifnoma.setLongitude(location.getLongitude());
-            taklifnoma.setLatitude(location.getLatitude());
-            userStates.put(chatId, "AYOLLAR_TOY_OSHI");
-            sendMessage(chatId, "Ayollar uchun to'y oshi bormi❓", createYesNoKeyboard());
-            userSessions.put(chatId, taklifnoma);
+    private void handleTypeSelection(long chatId, String text, UserSession session) {
+        if (BotConstants.TYPE_TEMPLATES.containsKey(text)) {
+            session.getTaklifnoma().setType(text);
+            session.setState(BotState.AWAITING_TEMPLATE);
+            sendTemplatesWithPreviews(chatId, text);
+        } else {
+            sendMessage(chatId, "Iltimos, quyidagi turlardan birini tanlang:", createTypeKeyboard());
         }
     }
 
-    private void processPhoto(long chatId, List<PhotoSize> photos) {
-        String currentState = userStates.getOrDefault(chatId, "");
-        if ("REQUEST_PAYMENT".equals(currentState)) {
-            Taklifnoma taklifnoma = userSessions.getOrDefault(chatId, new Taklifnoma());
+    private void handleTemplateSelection(long chatId, String templateName, UserSession session) {
+        session.getTaklifnoma().setTemplate(templateName);
+        switch (session.getTaklifnoma().getType()) {
+            case "TO'Y":
+                session.setState(BotState.AWAITING_KUYOV_ISMI);
+                askQuestion(chatId, "Kuyov ismini kiriting:");
+                break;
+            case "TUG'ILGAN KUN TAKLIFNOMA":
+            case "TUG'ILGAN KUN TABRIKNOMA":
+                session.setState(BotState.AWAITING_TUGILGAN_KUN_EGASI);
+                askQuestion(chatId, "Tug'ilgan kun egasining ismini kiriting:");
+                break;
+        }
+    }
 
-            try {
-                // Get the largest photo
-                PhotoSize largestPhoto = photos.stream()
-                        .max(Comparator.comparing(PhotoSize::getFileSize))
-                        .orElseThrow(() -> new IllegalStateException("Rasm topilmadi"));
+    private void handleYesNoAnswer(long chatId, String text, UserSession session, boolean isAyollar) {
+        boolean answer = text.equalsIgnoreCase("Ha");
+        if (isAyollar) {
+            session.getTaklifnoma().setAyollarToyOshi(answer);
+            session.setState(BotState.AWAITING_ERKAKLAR_TOSH);
+            askQuestion(chatId, "Erkaklar uchun to'y oshi bormi? (Ha/Yo'q)");
+        } else {
+            session.getTaklifnoma().setErkaklarToyOshi(answer);
+            session.setState(BotState.AWAITING_NIKOH_VAQTI);
+            askQuestion(chatId, "Nikoh vaqtini kiriting (HH:mm formatida):");
+        }
+    }
 
-                // Get file from Telegram
-                GetFile getFile = new GetFile();
-                getFile.setFileId(largestPhoto.getFileId());
-                org.telegram.telegrambots.meta.api.objects.File telegramFile = execute(getFile);
+    private void handleTimeInput(long chatId, String text, UserSession session, boolean isNikohVaqti) {
+        try {
+            LocalTime time = LocalTime.parse(text, TIME_FORMATTER);
+            if (isNikohVaqti) {
+                session.getTaklifnoma().setNikohVaqti(time);
+                requestPayment(chatId, session);
+            } else {
+                session.getTaklifnoma().setTadbirVaqti(time);
+                requestPayment(chatId, session);
+            }
+        } catch (DateTimeParseException e) {
+            sendMessage(chatId, "Noto'g'ri vaqt formati. Iltimos, vaqtni HH:mm formatida kiriting (masalan, 14:30):");
+        }
+    }
 
-                // Download file
-                String filePath = telegramFile.getFilePath();
-                String fullFilePath = "https://api.telegram.org/file/bot" + getBotToken() + "/" + filePath;
+    private void handleAgeInput(long chatId, String text, UserSession session) {
+        try {
+            int age = Integer.parseInt(text);
+            if (age <= 0 || age > 150) {
+                sendMessage(chatId, "Noto'g'ri yosh. Iltimos, to'g'ri yoshni kiriting:");
+                return;
+            }
+            session.getTaklifnoma().setYosh(age);
+            if ("TUG'ILGAN KUN TAKLIFNOMA".equals(session.getTaklifnoma().getType())) {
+                session.setState(BotState.AWAITING_MANZIL);
+                askQuestion(chatId, "Tadbir o'tkaziladigan joy manzilini kiriting:");
+            } else {
+                session.setState(BotState.AWAITING_TABRIK_MATNI);
+                askQuestion(chatId, "Tabrik matnini kiriting:");
+            }
+        } catch (NumberFormatException e) {
+            sendMessage(chatId, "Noto'g'ri format. Iltimos, raqam kiriting:");
+        }
+    }
 
-                URL url = new URL(fullFilePath);
-                byte[] imageBytes;
-                try (InputStream is = url.openStream()) {
-                    imageBytes = is.readAllBytes();
-                }
+    private void handleLocation(long chatId, Location location, UserSession session) {
+        if (session.getState() == BotState.AWAITING_LOCATION) {
+            session.getTaklifnoma().setLatitude(location.getLatitude());
+            session.getTaklifnoma().setLongitude(location.getLongitude());
 
-                // Generate a unique filename
-                String fileName = "payment_" + chatId + "_" + System.currentTimeMillis() + ".jpg";
-
-                // Save file using FileStorageService
-                FileStorage savedFile = fileStorageService.saves(fileName, imageBytes, "image/jpeg");
-
-                // Update taklifnoma with the saved file's hashId
-                taklifnoma.setPaymentReceiptPath(savedFile.getHashId());
-                userSessions.put(chatId, taklifnoma);
-
-                // Move to confirmation state
-                userStates.put(chatId, "CONFIRM");
-                sendConfirmation(chatId, taklifnoma);
-
-            } catch (Exception e) {
-                e.printStackTrace();
-                sendMessage(chatId, "To'lov chekini yuklashda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.");
+            if ("TO'Y".equals(session.getTaklifnoma().getType())) {
+                session.setState(BotState.AWAITING_AYOLLAR_TOSH);
+                askQuestion(chatId, "Ayollar uchun to'y oshi bormi? (Ha/Yo'q)");
+            } else {
+                session.setState(BotState.AWAITING_TADBIR_VAQTI);
+                askQuestion(chatId, "Tadbir vaqtini kiriting (HH:mm formatida):");
             }
         }
     }
-    private void requestPayment(long chatId) {
-        sendMessage(chatId, "Buyurtmani tasdiqlash uchun, iltimos, quyidagi kartaga 20000 so'm o'tkazing:\n" +
-                "\n" +
-                "Karta raqami: 9860020115429191\n" +
-                "\n" +
-                "To'lovni amalga oshirgach, to'lov chekining rasmini yuboring.");
+
+    private void handlePhoto(long chatId, List<PhotoSize> photos, UserSession session) {
+        if (session.getState() != BotState.AWAITING_PAYMENT) {
+            return;
+        }
+
+        try {
+            PhotoSize largestPhoto = photos.stream()
+                    .max(Comparator.comparing(PhotoSize::getFileSize))
+                    .orElseThrow(() -> new IllegalStateException("Rasm topilmadi"));
+
+            String fileId = largestPhoto.getFileId();
+            GetFile getFile = new GetFile();
+            getFile.setFileId(fileId);
+
+            String filePath = execute(getFile).getFilePath();
+            String fullFilePath = "https://api.telegram.org/file/bot" + getBotToken() + "/" + filePath;
+
+            URL url = new URL(fullFilePath);
+            byte[] imageBytes;
+            try (InputStream is = url.openStream()) {
+                imageBytes = is.readAllBytes();
+            }
+
+            String fileName = "payment_" + chatId + "_" + System.currentTimeMillis() + ".jpg";
+            FileStorage savedFile = fileStorageService.saves(fileName, imageBytes, "image/jpeg");
+
+            session.getTaklifnoma().setPaymentReceiptPath(savedFile.getHashId());
+            session.setState(BotState.AWAITING_CONFIRMATION);
+            sendConfirmation(chatId, session);
+        } catch (Exception e) {
+            e.printStackTrace();
+            sendMessage(chatId, "To'lov chekini yuklashda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.");
+        }
     }
 
-    private void saveTaklifnoma(long chatId) {
-        Taklifnoma taklifnoma = userSessions.get(chatId);
-        taklifnoma.setBuyurtmachiId(String.valueOf(chatId));
-        taklifnomaRepository.save(taklifnoma);
-        sendMessage(chatId, "Sizning buyurtmangiz qabul qilindi. Tez orada siz bilan bog'lanamiz.");
-        userStates.remove(chatId);
-        userSessions.remove(chatId);
+    private void handleConfirmation(long chatId, String text, UserSession session) {
+        if ("Tasdiqlash".equalsIgnoreCase(text)) {
+            Taklifnoma taklifnoma = session.getTaklifnoma();
+            taklifnoma.setBuyurtmachiId(String.valueOf(chatId));
+            taklifnomaRepository.save(taklifnoma);
+            sendMessage(chatId, "Sizning buyurtmangiz qabul qilindi. Tez orada siz bilan bog'lanamiz.");
+            userSessions.remove(chatId);
+        } else if ("Bekor qilish".equalsIgnoreCase(text)) {
+            sendMessage(chatId, "Buyurtma bekor qilindi. Qaytadan boshlash uchun /start buyrug'ini yuboring.");
+            userSessions.remove(chatId);
+        } else {
+            sendMessage(chatId, "Iltimos, 'Tasdiqlash' yoki 'Bekor qilish' tugmalaridan birini tanlang.");
+        }
+    }
+
+    private void startCommand(long chatId) {
+        UserSession session = new UserSession();
+        session.setState(BotState.AWAITING_TYPE);
+        userSessions.put(chatId, session);
+        sendMessage(chatId, "Taklifnoma turini tanlang:", createTypeKeyboard());
+    }
+
+    private void requestPayment(long chatId, UserSession session) {
+        session.setState(BotState.AWAITING_PAYMENT);
+        sendMessage(chatId, String.format(
+                "Buyurtmani tasdiqlash uchun, iltimos, quyidagi kartaga %d so'm o'tkazing:\n\n" +
+                        "Karta raqami: %s\n\n" +
+                        "To'lovni amalga oshirgach, to'lov chekining rasmini yuboring.",
+                BotConstants.PAYMENT_AMOUNT,
+                BotConstants.PAYMENT_CARD
+        ));
+    }
+
+    private void sendConfirmation(long chatId, UserSession session) {
+        Taklifnoma taklifnoma = session.getTaklifnoma();
+        StringBuilder message = new StringBuilder();
+        message.append("To'lov cheki: Qabul qilindi\n\n");
+        message.append("Tasdiqlaysizmi?\n\n");
+        message.append(String.format("Turi: %s\n", taklifnoma.getType()));
+        message.append(String.format("Template: %s\n", taklifnoma.getTemplate()));
+
+        switch (taklifnoma.getType()) {
+            case "TO'Y":
+                appendWeddingDetails(message, taklifnoma);
+                break;
+            case "TUG'ILGAN KUN TAKLIFNOMA":
+                appendBirthdayInvitationDetails(message, taklifnoma);
+                break;
+            case "TUG'ILGAN KUN TABRIKNOMA":
+                appendBirthdayCardDetails(message, taklifnoma);
+                break;
+        }
+
+        sendMessage(chatId, message.toString(), createConfirmKeyboard());
+    }
+
+    private void appendWeddingDetails(StringBuilder message, Taklifnoma taklifnoma) {
+        message.append(String.format("Kuyov ismi: %s\n", taklifnoma.getKuyovIsmi()));
+        message.append(String.format("Kelin ismi: %s\n", taklifnoma.getKelinIsmi()));
+        message.append(String.format("Manzil: %s\n", taklifnoma.getManzil()));
+        message.append(String.format("Lokatsiya: %.6f, %.6f\n",
+                taklifnoma.getLongitude(), taklifnoma.getLatitude()));
+        message.append(String.format("Ayollar to'y oshi: %s\n",
+                taklifnoma.isAyollarToyOshi() ? "Bor" : "Yo'q"));
+        message.append(String.format("Erkaklar to'y oshi: %s\n",
+                taklifnoma.isErkaklarToyOshi() ? "Bor" : "Yo'q"));
+        message.append(String.format("Nikoh vaqti: %s\n",
+                taklifnoma.getNikohVaqti().format(TIME_FORMATTER)));
+    }
+
+    private void appendBirthdayInvitationDetails(StringBuilder message, Taklifnoma taklifnoma) {
+        message.append(String.format("Tug'ilgan kun egasi: %s\n", taklifnoma.getTugulganKunEgasi()));
+        message.append(String.format("Yoshi: %d\n", taklifnoma.getYosh()));
+        message.append(String.format("Manzil: %s\n", taklifnoma.getManzil()));
+        message.append(String.format("Lokatsiya: %.6f, %.6f\n",
+                taklifnoma.getLongitude(), taklifnoma.getLatitude()));
+        message.append(String.format("Tadbir vaqti: %s\n",
+                taklifnoma.getTadbirVaqti().format(TIME_FORMATTER)));
+    }
+
+    private void appendBirthdayCardDetails(StringBuilder message, Taklifnoma taklifnoma) {
+        message.append(String.format("Tug'ilgan kun egasi: %s\n", taklifnoma.getTugulganKunEgasi()));
+        message.append(String.format("Yoshi: %d\n", taklifnoma.getYosh()));
+        message.append(String.format("Tabrik matni: %s\n", taklifnoma.getTabrikMatni()));
     }
 
     private void sendMessage(long chatId, String text) {
@@ -370,11 +365,11 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
-    private void sendMessage(long chatId, String text, ReplyKeyboardMarkup keyboardMarkup) {
+    private void sendMessage(long chatId, String text, ReplyKeyboardMarkup keyboard) {
         SendMessage message = new SendMessage();
         message.setChatId(String.valueOf(chatId));
         message.setText(text);
-        message.setReplyMarkup(keyboardMarkup);
+        message.setReplyMarkup(keyboard);
         try {
             execute(message);
         } catch (TelegramApiException e) {
@@ -382,98 +377,24 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
+    private void askQuestion(long chatId, String question) {
+        sendMessage(chatId, question);
+    }
+
     private ReplyKeyboardMarkup createTypeKeyboard() {
         ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup();
         List<KeyboardRow> keyboard = new ArrayList<>();
-        KeyboardRow row = new KeyboardRow();
-        row.add("To'y");
-        keyboard.add(row);
-        keyboardMarkup.setKeyboard(keyboard);
-        keyboardMarkup.setResizeKeyboard(true);
-        keyboardMarkup.setOneTimeKeyboard(true);
-        return keyboardMarkup;
-    }
 
-    private void sendTemplatesWithPreviews(long chatId) {
-        sendMessage(chatId, "Taklifnoma shablonlari yuklanmoqda. Iltimos, kuting...");
+        KeyboardRow row1 = new KeyboardRow();
+        row1.add("TO'Y");
 
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        KeyboardRow row2 = new KeyboardRow();
+        row2.add("TUG'ILGAN KUN TAKLIFNOMA");
+        row2.add("TUG'ILGAN KUN TABRIKNOMA");
 
-        for (TemplateInfo template : TEMPLATES) {
-            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                try {
-                    SendPhoto sendPhoto = new SendPhoto();
-                    sendPhoto.setChatId(String.valueOf(chatId));
-                    sendPhoto.setPhoto(new InputFile(new URL(template.getPreviewUrl()).openStream(), template.getName() + ".jpg"));
+        keyboard.add(row1);
+        keyboard.add(row2);
 
-                    InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
-                    List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
-                    List<InlineKeyboardButton> rowInline = new ArrayList<>();
-
-                    InlineKeyboardButton selectButton = new InlineKeyboardButton();
-                    selectButton.setText("Tanlash");
-                    selectButton.setCallbackData("select_template:" + template.getName());
-                    rowInline.add(selectButton);
-
-                    rowsInline.add(rowInline);
-                    markupInline.setKeyboard(rowsInline);
-
-                    sendPhoto.setReplyMarkup(markupInline);
-                    sendPhoto.setCaption(template.getName());
-
-                    execute(sendPhoto);
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    sendMessage(chatId, "Shablon rasmini yuklashda xatolik: " + template.getName() + ". Iltimos, qaytadan urinib ko'ring.");
-                }
-            }, executorService);
-
-            futures.add(future);
-        }
-
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).thenRun(() ->
-                sendMessage(chatId, "Barcha shablonlar yuklandi. Iltimos, o'zingizga yoqqanini tanlang.")
-        );
-    }
-
-    private void sendSticker(long chatId, String stickerId) {
-        SendSticker sendSticker = new SendSticker();
-        sendSticker.setChatId(String.valueOf(chatId));
-        sendSticker.setSticker(new InputFile(stickerId));
-        try {
-            execute(sendSticker);
-        } catch (TelegramApiException e) {
-            e.printStackTrace();
-        }
-    }
-
-    private ReplyKeyboardMarkup createTemplateKeyboard() {
-        ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup();
-        List<KeyboardRow> keyboard = new ArrayList<>();
-
-        // Create rows with two templates each
-        for (int i = 0; i < TEMPLATES.size(); i += 2) {
-            KeyboardRow row = new KeyboardRow();
-            row.add(TEMPLATES.get(i).getName());
-            if (i + 1 < TEMPLATES.size()) {
-                row.add(TEMPLATES.get(i + 1).getName());
-            }
-            keyboard.add(row);
-        }
-
-        keyboardMarkup.setKeyboard(keyboard);
-        keyboardMarkup.setResizeKeyboard(true);
-        keyboardMarkup.setOneTimeKeyboard(true);
-        return keyboardMarkup;
-    }
-
-    private ReplyKeyboardMarkup createYesNoKeyboard() {
-        ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup();
-        List<KeyboardRow> keyboard = new ArrayList<>();
-        KeyboardRow row = new KeyboardRow();
-        row.add("Ha");
-        row.add("Yo'q");
-        keyboard.add(row);
         keyboardMarkup.setKeyboard(keyboard);
         keyboardMarkup.setResizeKeyboard(true);
         keyboardMarkup.setOneTimeKeyboard(true);
@@ -493,36 +414,51 @@ public class TelegramBot extends TelegramLongPollingBot {
         return keyboardMarkup;
     }
 
-    private void sendConfirmation(long chatId, Taklifnoma taklifnoma) {
-        String confirmationMessage = String.format(
-                "To'lov cheki: Qabul qilindi\n\n" +
-                        "Tasdiqlaysizmi?\n\n" +
-                        "Turi: %s\n" +
-                        "Template: %s\n" +
-                        "Kuyov ismi: %s\n" +
-                        "Kelin ismi: %s\n" +
-                        "Taklif qiluvchi: %s\n" +
-                        "Manzil: %s\n" +
-                        "Lokatsiya: %.6f, %.6f\n" +
-                        "Ayollar to'y oshi: %s\n" +
-                        "Ayollar to'y oshi vaqti: %s\n" +
-                        "Erkaklar to'y oshi: %s\n" +
-                        "Erkaklar to'y oshi vaqti: %s\n" +
-                        "Nikoh vaqti: %s\n",
-                taklifnoma.getType(),
-                taklifnoma.getTemplate(),
-                taklifnoma.getKuyovIsmi(),
-                taklifnoma.getKelinIsmi(),
-                taklifnoma.getTaklifQiluvchiIsmi(),
-                taklifnoma.getManzil(),
-                taklifnoma.getLongitude(),
-                taklifnoma.getLatitude(),
-                taklifnoma.isAyollarToyOshi() ? "Bor" : "Yo'q",
-                taklifnoma.getAyollarToyOshiVaqti() != null ? taklifnoma.getAyollarToyOshiVaqti().format(TIME_FORMATTER) : "Yo'q",
-                taklifnoma.isErkaklarToyOshi() ? "Bor" : "Yo'q",
-                taklifnoma.getErkaklarToyOshiVaqti() != null ? taklifnoma.getErkaklarToyOshiVaqti().format(TIME_FORMATTER) : "Yo'q",
-                taklifnoma.getNikohVaqti() != null ? taklifnoma.getNikohVaqti().format(TIME_FORMATTER) : "Kiritilmagan"
-        );
-        sendMessage(chatId, confirmationMessage, createConfirmKeyboard());
+    private void sendTemplatesWithPreviews(long chatId, String type) {
+        sendMessage(chatId, "Taklifnoma shablonlari yuklanmoqda. Iltimos, kuting...");
+
+        List<TemplateInfo> templates = BotConstants.TYPE_TEMPLATES.get(type);
+        for (TemplateInfo template : templates) {
+            try {
+                SendPhoto sendPhoto = new SendPhoto();
+                sendPhoto.setChatId(String.valueOf(chatId));
+                sendPhoto.setPhoto(new InputFile(new URL(template.getPreviewUrl()).openStream(),
+                        template.getName() + ".jpg"));
+
+                InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
+                List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
+                List<InlineKeyboardButton> rowInline = new ArrayList<>();
+
+                InlineKeyboardButton selectButton = new InlineKeyboardButton();
+                selectButton.setText("Tanlash");
+                selectButton.setCallbackData("select_template:" + template.getName());
+                rowInline.add(selectButton);
+
+                rowsInline.add(rowInline);
+                markupInline.setKeyboard(rowsInline);
+
+                sendPhoto.setReplyMarkup(markupInline);
+                sendPhoto.setCaption(template.getName());
+
+                execute(sendPhoto);
+            } catch (Exception e) {
+                e.printStackTrace();
+                sendMessage(chatId, "Shablon rasmini yuklashda xatolik: " + template.getName());
+            }
+        }
+
+        sendMessage(chatId, "Barcha shablonlar yuklandi. Iltimos, o'zingizga yoqqanini tanlang.");
+    }
+
+    private void handleCallbackQuery(CallbackQuery callbackQuery) {
+        String callbackData = callbackQuery.getData();
+        long chatId = callbackQuery.getMessage().getChatId();
+        UserSession session = userSessions.get(chatId);
+
+        if (callbackData.startsWith("select_template:")) {
+            String templateName = callbackData.split(":")[1];
+            handleTemplateSelection(chatId, templateName, session);
+        }
     }
 }
+
