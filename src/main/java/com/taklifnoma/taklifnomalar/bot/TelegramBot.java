@@ -4,9 +4,11 @@ import com.taklifnoma.taklifnomalar.entity.FileStorage;
 import com.taklifnoma.taklifnomalar.entity.Taklifnoma;
 import com.taklifnoma.taklifnomalar.repository.TaklifnomaRepository;
 import com.taklifnoma.taklifnomalar.service.FileStorageService;
-import jakarta.annotation.PreDestroy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.GetFile;
@@ -19,8 +21,10 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKe
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
-import java.io.*;
+import java.io.InputStream;
 import java.net.URL;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -30,8 +34,13 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class TelegramBot extends TelegramLongPollingBot {
 
+    private static final Logger logger = LoggerFactory.getLogger(TelegramBot.class);
     private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm");
+    private static final long SESSION_TIMEOUT_MINUTES = 30;
+    private static final int MAX_RETRIES = 3;
+
     private final Map<Long, UserSession> userSessions = new ConcurrentHashMap<>();
+    private final Map<Long, Instant> sessionTimestamps = new ConcurrentHashMap<>();
 
     @Value("${bot.username}")
     private String botUsername;
@@ -57,15 +66,31 @@ public class TelegramBot extends TelegramLongPollingBot {
 
     @Override
     public void onUpdateReceived(Update update) {
+        long chatId = getChatId(update);
         try {
+            updateSessionTimestamp(chatId);
+
             if (update.hasMessage()) {
                 handleMessage(update.getMessage());
             } else if (update.hasCallbackQuery()) {
                 handleCallbackQuery(update.getCallbackQuery());
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.error("Error processing update for chat {}: {}", chatId, e.getMessage(), e);
+            sendErrorMessage(chatId);
         }
+    }
+
+    @Scheduled(fixedRate = 5 * 60 * 1000) // Run every 5 minutes
+    public void cleanupSessions() {
+        Instant timeout = Instant.now().minus(Duration.ofMinutes(SESSION_TIMEOUT_MINUTES));
+        sessionTimestamps.forEach((chatId, timestamp) -> {
+            if (timestamp.isBefore(timeout)) {
+                userSessions.remove(chatId);
+                sessionTimestamps.remove(chatId);
+                logger.info("Cleaned up inactive session for chat {}", chatId);
+            }
+        });
     }
 
     private void handleMessage(Message message) {
@@ -87,61 +112,77 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private void handleTextMessage(long chatId, String text, UserSession session) {
-        switch (session.getState()) {
-            case START:
-            case AWAITING_TYPE:
-                handleTypeSelection(chatId, text, session);
-                break;
-            case AWAITING_TEMPLATE:
-                handleTemplateSelection(chatId, text, session);
-                break;
-            case AWAITING_KUYOV_ISMI:
-                session.getTaklifnoma().setKuyovIsmi(text);
-                session.setState(BotState.AWAITING_KELIN_ISMI);
-                askQuestion(chatId, "Kelin ismini kiriting:");
-                break;
-            case AWAITING_KELIN_ISMI:
-                session.getTaklifnoma().setKelinIsmi(text);
-                session.setState(BotState.AWAITING_MANZIL);
-                askQuestion(chatId, "To'yxona manzilini kiriting:");
-                break;
-            case AWAITING_MANZIL:
-                session.getTaklifnoma().setManzil(text);
-                session.setState(BotState.AWAITING_LOCATION);
-                askQuestion(chatId, "Lokatsiyani yuboring:");
-                break;
-            case AWAITING_LOCATION:
-                // Skip - handled by location handler
-                break;
-            case AWAITING_AYOLLAR_TOSH:
-                handleYesNoAnswer(chatId, text, session, true);
-                break;
-            case AWAITING_ERKAKLAR_TOSH:
-                handleYesNoAnswer(chatId, text, session, false);
-                break;
-            case AWAITING_NIKOH_VAQTI:
-                handleTimeInput(chatId, text, session, true);
-                break;
-            case AWAITING_TUGILGAN_KUN_EGASI:
-                session.getTaklifnoma().setTugulganKunEgasi(text);
-                session.setState(BotState.AWAITING_YOSH);
-                askQuestion(chatId, "Necha yoshga to'layotganini kiriting:");
-                break;
-            case AWAITING_YOSH:
-                handleAgeInput(chatId, text, session);
-                break;
-            case AWAITING_TADBIR_VAQTI:
-                handleTimeInput(chatId, text, session, false);
-                break;
-            case AWAITING_TABRIK_MATNI:
-                session.getTaklifnoma().setTabrikMatni(text);
-                requestPayment(chatId, session);
-                break;
-            case AWAITING_CONFIRMATION:
-                handleConfirmation(chatId, text, session);
-                break;
-            default:
-                sendMessage(chatId, "Noma'lum buyruq. Iltimos, /start buyrug'ini yuboring.");
+        if (!validateInput(text, session.getState())) {
+            sendMessage(chatId, "Noto'g'ri ma'lumot kiritildi. Iltimos, qaytadan urinib ko'ring.");
+            return;
+        }
+
+        try {
+            switch (session.getState()) {
+                case START:
+                case AWAITING_TYPE:
+                    handleTypeSelection(chatId, text, session);
+                    break;
+                case AWAITING_TEMPLATE:
+                    handleTemplateSelection(chatId, text, session);
+                    break;
+                case AWAITING_KUYOV_ISMI:
+                    session.getTaklifnoma().setKuyovIsmi(text);
+                    session.setState(BotState.AWAITING_KELIN_ISMI);
+                    askQuestion(chatId, "Kelin ismini kiriting:");
+                    break;
+                case AWAITING_KELIN_ISMI:
+                    session.getTaklifnoma().setKelinIsmi(text);
+                    session.setState(BotState.AWAITING_MANZIL);
+                    askQuestion(chatId, "To'yxona manzilini kiriting:");
+                    break;
+                case AWAITING_MANZIL:
+                    session.getTaklifnoma().setManzil(text);
+                    session.setState(BotState.AWAITING_LOCATION);
+                    askQuestion(chatId, "Lokatsiyani yuboring:");
+                    break;
+                case AWAITING_LOCATION:
+                    // Skip - handled by location handler
+                    break;
+                case AWAITING_AYOLLAR_TOSH:
+                    handleYesNoAnswer(chatId, text, session, true);
+                    break;
+                case AWAITING_ERKAKLAR_TOSH:
+                    handleYesNoAnswer(chatId, text, session, false);
+                    break;
+                case AWAITING_AYOLLAR_TOSH_VAQTI:
+                    handleTimeInput(chatId, text, session, BotState.AWAITING_ERKAKLAR_TOSH);
+                    break;
+                case AWAITING_ERKAKLAR_TOSH_VAQTI:
+                    handleTimeInput(chatId, text, session, BotState.AWAITING_NIKOH_VAQTI);
+                    break;
+                case AWAITING_NIKOH_VAQTI:
+                    handleTimeInput(chatId, text, session, BotState.AWAITING_PAYMENT);
+                    break;
+                case AWAITING_TUGILGAN_KUN_EGASI:
+                    session.getTaklifnoma().setTugulganKunEgasi(text);
+                    session.setState(BotState.AWAITING_YOSH);
+                    askQuestion(chatId, "Necha yoshga to'layotganini kiriting:");
+                    break;
+                case AWAITING_YOSH:
+                    handleAgeInput(chatId, text, session);
+                    break;
+                case AWAITING_TADBIR_VAQTI:
+                    handleTimeInput(chatId, text, session, BotState.AWAITING_PAYMENT);
+                    break;
+                case AWAITING_TABRIK_MATNI:
+                    session.getTaklifnoma().setTabrikMatni(text);
+                    requestPayment(chatId, session);
+                    break;
+                case AWAITING_CONFIRMATION:
+                    handleConfirmation(chatId, text, session);
+                    break;
+                default:
+                    sendMessage(chatId, "Noma'lum buyruq. Iltimos, /start buyrug'ini yuboring.");
+            }
+        } catch (Exception e) {
+            logger.error("Error handling message for chat {}: {}", chatId, e.getMessage(), e);
+            sendErrorMessage(chatId);
         }
     }
 
@@ -171,27 +212,69 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private void handleYesNoAnswer(long chatId, String text, UserSession session, boolean isAyollar) {
-        boolean answer = text.equalsIgnoreCase("Ha");
-        if (isAyollar) {
-            session.getTaklifnoma().setAyollarToyOshi(answer);
-            session.setState(BotState.AWAITING_ERKAKLAR_TOSH);
-            askQuestion(chatId, "Erkaklar uchun to'y oshi bormi? (Ha/Yo'q)");
+        ReplyKeyboardMarkup keyboardMarkup = createYesNoKeyboard();
+
+        if (text.equalsIgnoreCase("Ha") || text.equalsIgnoreCase("Yo'q")) {
+            boolean answer = text.equalsIgnoreCase("Ha");
+            if (isAyollar) {
+                session.getTaklifnoma().setAyollarToyOshi(answer);
+                if (answer) {
+                    session.setState(BotState.AWAITING_AYOLLAR_TOSH_VAQTI);
+                    askQuestion(chatId, "Ayollar uchun to'y oshi vaqtini kiriting (HH:mm formatida):");
+                } else {
+                    session.setState(BotState.AWAITING_ERKAKLAR_TOSH);
+                    sendMessage(chatId, "Erkaklar uchun to'y oshi bormi?", keyboardMarkup);
+                }
+            } else {
+                session.getTaklifnoma().setErkaklarToyOshi(answer);
+                if (answer) {
+                    session.setState(BotState.AWAITING_ERKAKLAR_TOSH_VAQTI);
+                    askQuestion(chatId, "Erkaklar uchun to'y oshi vaqtini kiriting (HH:mm formatida):");
+                } else {
+                    session.setState(BotState.AWAITING_NIKOH_VAQTI);
+                    askQuestion(chatId, "Nikoh vaqtini kiriting (HH:mm formatida):");
+                }
+            }
         } else {
-            session.getTaklifnoma().setErkaklarToyOshi(answer);
-            session.setState(BotState.AWAITING_NIKOH_VAQTI);
-            askQuestion(chatId, "Nikoh vaqtini kiriting (HH:mm formatida):");
+            sendMessage(chatId, "Iltimos, 'Ha' yoki 'Yo'q' tugmalaridan birini tanlang.", keyboardMarkup);
         }
     }
 
-    private void handleTimeInput(long chatId, String text, UserSession session, boolean isNikohVaqti) {
+    private ReplyKeyboardMarkup createYesNoKeyboard() {
+        ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup();
+        List<KeyboardRow> keyboard = new ArrayList<>();
+        KeyboardRow row = new KeyboardRow();
+        row.add("Ha");
+        row.add("Yo'q");
+        keyboard.add(row);
+        keyboardMarkup.setKeyboard(keyboard);
+        keyboardMarkup.setResizeKeyboard(true);
+        keyboardMarkup.setOneTimeKeyboard(true);
+        return keyboardMarkup;
+    }
+
+    private void handleTimeInput(long chatId, String text, UserSession session, BotState nextState) {
         try {
             LocalTime time = LocalTime.parse(text, TIME_FORMATTER);
-            if (isNikohVaqti) {
-                session.getTaklifnoma().setNikohVaqti(time);
-                requestPayment(chatId, session);
-            } else {
-                session.getTaklifnoma().setTadbirVaqti(time);
-                requestPayment(chatId, session);
+            switch (session.getState()) {
+                case AWAITING_AYOLLAR_TOSH_VAQTI:
+                    session.getTaklifnoma().setAyollarToyOshiVaqti(time);
+                    session.setState(BotState.AWAITING_ERKAKLAR_TOSH);
+                    sendMessage(chatId, "Erkaklar uchun to'y oshi bormi?", createYesNoKeyboard());
+                    break;
+                case AWAITING_ERKAKLAR_TOSH_VAQTI:
+                    session.getTaklifnoma().setErkaklarToyOshiVaqti(time);
+                    session.setState(BotState.AWAITING_NIKOH_VAQTI);
+                    askQuestion(chatId, "Nikoh vaqtini kiriting (HH:mm formatida):");
+                    break;
+                case AWAITING_NIKOH_VAQTI:
+                    session.getTaklifnoma().setNikohVaqti(time);
+                    requestPayment(chatId, session);
+                    break;
+                case AWAITING_TADBIR_VAQTI:
+                    session.getTaklifnoma().setTadbirVaqti(time);
+                    requestPayment(chatId, session);
+                    break;
             }
         } catch (DateTimeParseException e) {
             sendMessage(chatId, "Noto'g'ri vaqt formati. Iltimos, vaqtni HH:mm formatida kiriting (masalan, 14:30):");
@@ -225,7 +308,7 @@ public class TelegramBot extends TelegramLongPollingBot {
 
             if ("TO'Y".equals(session.getTaklifnoma().getType())) {
                 session.setState(BotState.AWAITING_AYOLLAR_TOSH);
-                askQuestion(chatId, "Ayollar uchun to'y oshi bormi? (Ha/Yo'q)");
+                sendMessage(chatId, "Ayollar uchun to'y oshi bormi?", createYesNoKeyboard());
             } else {
                 session.setState(BotState.AWAITING_TADBIR_VAQTI);
                 askQuestion(chatId, "Tadbir vaqtini kiriting (HH:mm formatida):");
@@ -263,7 +346,7 @@ public class TelegramBot extends TelegramLongPollingBot {
             session.setState(BotState.AWAITING_CONFIRMATION);
             sendConfirmation(chatId, session);
         } catch (Exception e) {
-            e.printStackTrace();
+            logger.error("Error handling photo for chat {}: {}", chatId, e.getMessage(), e);
             sendMessage(chatId, "To'lov chekini yuklashda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring.");
         }
     }
@@ -332,8 +415,16 @@ public class TelegramBot extends TelegramLongPollingBot {
                 taklifnoma.getLongitude(), taklifnoma.getLatitude()));
         message.append(String.format("Ayollar to'y oshi: %s\n",
                 taklifnoma.isAyollarToyOshi() ? "Bor" : "Yo'q"));
+        if (taklifnoma.isAyollarToyOshi()) {
+            message.append(String.format("Ayollar to'y oshi vaqti: %s\n",
+                    taklifnoma.getAyollarToyOshiVaqti().format(TIME_FORMATTER)));
+        }
         message.append(String.format("Erkaklar to'y oshi: %s\n",
                 taklifnoma.isErkaklarToyOshi() ? "Bor" : "Yo'q"));
+        if (taklifnoma.isErkaklarToyOshi()) {
+            message.append(String.format("Erkaklar to'y oshi vaqti: %s\n",
+                    taklifnoma.getErkaklarToyOshiVaqti().format(TIME_FORMATTER)));
+        }
         message.append(String.format("Nikoh vaqti: %s\n",
                 taklifnoma.getNikohVaqti().format(TIME_FORMATTER)));
     }
@@ -361,7 +452,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         try {
             execute(message);
         } catch (TelegramApiException e) {
-            e.printStackTrace();
+            logger.error("Error sending message to chat {}: {}", chatId, e.getMessage(), e);
         }
     }
 
@@ -373,7 +464,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         try {
             execute(message);
         } catch (TelegramApiException e) {
-            e.printStackTrace();
+            logger.error("Error sending message with keyboard to chat {}: {}", chatId, e.getMessage(), e);
         }
     }
 
@@ -415,6 +506,11 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private void sendTemplatesWithPreviews(long chatId, String type) {
+        UserSession session = userSessions.get(chatId);
+        session.setState(BotState.AWAITING_TEMPLATE);
+        session.setTemplateCount(0);
+        session.setTotalTemplates(BotConstants.TYPE_TEMPLATES.get(type).size());
+
         sendMessage(chatId, "Taklifnoma shablonlari yuklanmoqda. Iltimos, kuting...");
 
         List<TemplateInfo> templates = BotConstants.TYPE_TEMPLATES.get(type);
@@ -441,13 +537,16 @@ public class TelegramBot extends TelegramLongPollingBot {
                 sendPhoto.setCaption(template.getName());
 
                 execute(sendPhoto);
+                session.incrementTemplateCount();
             } catch (Exception e) {
-                e.printStackTrace();
+                logger.error("Error sending template preview for chat {}: {}", chatId, e.getMessage(), e);
                 sendMessage(chatId, "Shablon rasmini yuklashda xatolik: " + template.getName());
             }
         }
 
-        sendMessage(chatId, "Barcha shablonlar yuklandi. Iltimos, o'zingizga yoqqanini tanlang.");
+        if (session.getTemplateCount() == session.getTotalTemplates()) {
+            sendMessage(chatId, "Barcha shablonlar yuklandi. Iltimos, o'zingizga yoqqanini tanlang.");
+        }
     }
 
     private void handleCallbackQuery(CallbackQuery callbackQuery) {
@@ -457,8 +556,55 @@ public class TelegramBot extends TelegramLongPollingBot {
 
         if (callbackData.startsWith("select_template:")) {
             String templateName = callbackData.split(":")[1];
-            handleTemplateSelection(chatId, templateName, session);
+            if (session.getTemplateCount() == session.getTotalTemplates()) {
+                handleTemplateSelection(chatId, templateName, session);
+            } else {
+                sendMessage(chatId, "Iltimos, barcha shablonlar yuklanishini kuting.");
+            }
         }
+    }
+
+    private boolean validateInput(String input, BotState state) {
+        if (input == null || input.trim().isEmpty()) {
+            return false;
+        }
+
+        switch (state) {
+            case AWAITING_KUYOV_ISMI:
+            case AWAITING_KELIN_ISMI:
+            case AWAITING_TUGILGAN_KUN_EGASI:
+                return input.length() >= BotConstants.MIN_NAME_LENGTH && input.length() <= BotConstants.MAX_NAME_LENGTH;
+            case AWAITING_YOSH:
+                try {
+                    int age = Integer.parseInt(input);
+                    return age > 0 && age <= 150;
+                } catch (NumberFormatException e) {
+                    return false;
+                }
+            case AWAITING_MANZIL:
+                return input.length() <= BotConstants.MAX_ADDRESS_LENGTH;
+            case AWAITING_TABRIK_MATNI:
+                return input.length() <= BotConstants.MAX_MESSAGE_LENGTH;
+            default:
+                return true;
+        }
+    }
+
+    private void updateSessionTimestamp(long chatId) {
+        sessionTimestamps.put(chatId, Instant.now());
+    }
+
+    private void sendErrorMessage(long chatId) {
+        sendMessage(chatId, BotConstants.ERROR_SYSTEM);
+    }
+
+    private long getChatId(Update update) {
+        if (update.hasMessage()) {
+            return update.getMessage().getChatId();
+        } else if (update.hasCallbackQuery()) {
+            return update.getCallbackQuery().getMessage().getChatId();
+        }
+        throw new IllegalArgumentException("Cannot extract chat ID from update");
     }
 }
 

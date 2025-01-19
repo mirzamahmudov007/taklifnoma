@@ -1,54 +1,47 @@
 package com.taklifnoma.taklifnomalar.bot;
 
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 public class BotConstants {
-    public static final String PAYMENT_CARD = "9860020115429191";
-    public static final int PAYMENT_AMOUNT = 20000;
+    public static final int PAYMENT_AMOUNT = 50000; // So'm
+    public static final String PAYMENT_CARD = "8600 1234 5678 9012";
 
+    public static final int MAX_REQUESTS_PER_MINUTE = 20;
+    public static final int MAX_PHOTO_SIZE_MB = 5;
 
+    public static final int MIN_NAME_LENGTH = 2;
+    public static final int MAX_NAME_LENGTH = 50;
+    public static final int MAX_ADDRESS_LENGTH = 200;
+    public static final int MAX_MESSAGE_LENGTH = 1000;
 
-    public static final Map<String, List<TemplateInfo>> TYPE_TEMPLATES = Map.of(
-            "TO'Y", List.of(
-                    new TemplateInfo("To'y Shablon 1", "https://web2print.uz/content/pxp-template-set-cover/69B009770DF78F6930F6A0083A5EB3D4.jpg?size=M"),
-                    new TemplateInfo("To'y Shablon 2", "https://web2print.uz/content/pxp-template-set-cover/69B009770DF78F6930F6A0083A5EB3D4.jpg?size=M"),
-                    new TemplateInfo("To'y Shablon 3", "https://web2print.uz/content/pxp-template-set-cover/69B009770DF78F6930F6A0083A5EB3D4.jpg?size=M")
-            ),
-            "TUG'ILGAN KUN TAKLIFNOMA", List.of(
-                    new TemplateInfo("Tug'ilgan kun Shablon 1", "https://web2print.uz/content/pxp-template-set-cover/69B009770DF78F6930F6A0083A5EB3D4.jpg?size=M"),
-                    new TemplateInfo("Tug'ilgan kun Shablon 2", "https://web2print.uz/content/pxp-template-set-cover/69B009770DF78F6930F6A0083A5EB3D4.jpg?size=M")
-            ),
-            "TUG'ILGAN KUN TABRIKNOMA", List.of(
-                    new TemplateInfo("Tabriknoma Shablon 1", "https://web2print.uz/content/pxp-template-set-cover/69B009770DF78F6930F6A0083A5EB3D4.jpg?size=M"),
-                    new TemplateInfo("Tabriknoma Shablon 2", "https://web2print.uz/content/pxp-template-set-cover/69B009770DF78F6930F6A0083A5EB3D4.jpg?size=M")
-            )
-    );
+    public static final String ERROR_INVALID_NAME = "Ism uzunligi 2 dan 50 gacha bo'lishi kerak";
+    public static final String ERROR_INVALID_AGE = "Yosh 1 dan 150 gacha bo'lishi kerak";
+    public static final String ERROR_INVALID_TIME = "Vaqt noto'g'ri formatda kiritildi";
+    public static final String ERROR_INVALID_LOCATION = "Lokatsiya ma'lumotlari noto'g'ri";
+    public static final String ERROR_SYSTEM = "Tizimda xatolik yuz berdi. Iltimos, keyinroq urinib ko'ring";
 
-    public static final Map<String, List<String>> TYPE_QUESTIONS = Map.of(
-            "TO'Y", List.of(
-                    "Kuyov ismini kiriting:",
-                    "Kelin ismini kiriting:",
-                    "To'yxona manzilini kiriting:",
-                    "Lokatsiyani yuboring:",
-                    "Ayollar uchun to'y oshi bormi? (Ha/Yo'q)",
-                    "Erkaklar uchun to'y oshi bormi? (Ha/Yo'q)",
-                    "Nikoh vaqtini kiriting (HH:mm formatida):"
-            ),
-            "TUG'ILGAN KUN TAKLIFNOMA", List.of(
-                    "Tug'ilgan kun egasining ismini kiriting:",
-                    "Necha yoshga to'layotganini kiriting:",
-                    "Tadbir o'tkaziladigan joy manzilini kiriting:",
-                    "Lokatsiyani yuboring:",
-                    "Tadbir vaqtini kiriting (HH:mm formatida):"
-            ),
-            "TUG'ILGAN KUN TABRIKNOMA", List.of(
-                    "Tabrik yo'llanayotgan kishining ismini kiriting:",
-                    "Necha yoshga to'layotganini kiriting:",
-                    "Tabrik matnini kiriting:"
-            )
-    );
+    public static final Map<String, List<TemplateInfo>> TYPE_TEMPLATES = new HashMap<>();
 
+    static {
+        TYPE_TEMPLATES.put("TO'Y", Arrays.asList(
+                new TemplateInfo("To'y 1", "https://lh5.googleusercontent.com/proxy/z14mlq_5C4Lj2UUvQd2xTK6t-wRhImOBalhN8x8207FWsxSnFS_cfdrr2TEYBwji9PGcQR7VvcoMqCgGnEoZkc7FegCe5BVqiMbmdJKUHpeLhoYKbWWVCK-YOHr516YYkAX_LR0JsS0xXO9PIhNWW4bm5Md5AJMPW7NIqOv6RwH1JlM"),
+                new TemplateInfo("To'y 2", "https://lh5.googleusercontent.com/proxy/z14mlq_5C4Lj2UUvQd2xTK6t-wRhImOBalhN8x8207FWsxSnFS_cfdrr2TEYBwji9PGcQR7VvcoMqCgGnEoZkc7FegCe5BVqiMbmdJKUHpeLhoYKbWWVCK-YOHr516YYkAX_LR0JsS0xXO9PIhNWW4bm5Md5AJMPW7NIqOv6RwH1JlM"),
+                new TemplateInfo("To'y 3", "https://lh5.googleusercontent.com/proxy/z14mlq_5C4Lj2UUvQd2xTK6t-wRhImOBalhN8x8207FWsxSnFS_cfdrr2TEYBwji9PGcQR7VvcoMqCgGnEoZkc7FegCe5BVqiMbmdJKUHpeLhoYKbWWVCK-YOHr516YYkAX_LR0JsS0xXO9PIhNWW4bm5Md5AJMPW7NIqOv6RwH1JlM")
+        ));
 
+        TYPE_TEMPLATES.put("TUG'ILGAN KUN TAKLIFNOMA", Arrays.asList(
+                new TemplateInfo("Tug'ilgan kun 1", "https://lh5.googleusercontent.com/proxy/z14mlq_5C4Lj2UUvQd2xTK6t-wRhImOBalhN8x8207FWsxSnFS_cfdrr2TEYBwji9PGcQR7VvcoMqCgGnEoZkc7FegCe5BVqiMbmdJKUHpeLhoYKbWWVCK-YOHr516YYkAX_LR0JsS0xXO9PIhNWW4bm5Md5AJMPW7NIqOv6RwH1JlM"),
+                new TemplateInfo("Tug'ilgan kun 2", "https://lh5.googleusercontent.com/proxy/z14mlq_5C4Lj2UUvQd2xTK6t-wRhImOBalhN8x8207FWsxSnFS_cfdrr2TEYBwji9PGcQR7VvcoMqCgGnEoZkc7FegCe5BVqiMbmdJKUHpeLhoYKbWWVCK-YOHr516YYkAX_LR0JsS0xXO9PIhNWW4bm5Md5AJMPW7NIqOv6RwH1JlM"),
+                new TemplateInfo("Tug'ilgan kun 3", "https://lh5.googleusercontent.com/proxy/z14mlq_5C4Lj2UUvQd2xTK6t-wRhImOBalhN8x8207FWsxSnFS_cfdrr2TEYBwji9PGcQR7VvcoMqCgGnEoZkc7FegCe5BVqiMbmdJKUHpeLhoYKbWWVCK-YOHr516YYkAX_LR0JsS0xXO9PIhNWW4bm5Md5AJMPW7NIqOv6RwH1JlM")
+        ));
+
+        TYPE_TEMPLATES.put("TUG'ILGAN KUN TABRIKNOMA", Arrays.asList(
+                new TemplateInfo("Tabriknoma 1", "https://lh5.googleusercontent.com/proxy/z14mlq_5C4Lj2UUvQd2xTK6t-wRhImOBalhN8x8207FWsxSnFS_cfdrr2TEYBwji9PGcQR7VvcoMqCgGnEoZkc7FegCe5BVqiMbmdJKUHpeLhoYKbWWVCK-YOHr516YYkAX_LR0JsS0xXO9PIhNWW4bm5Md5AJMPW7NIqOv6RwH1JlM"),
+                new TemplateInfo("Tabriknoma 2", "https://lh5.googleusercontent.com/proxy/z14mlq_5C4Lj2UUvQd2xTK6t-wRhImOBalhN8x8207FWsxSnFS_cfdrr2TEYBwji9PGcQR7VvcoMqCgGnEoZkc7FegCe5BVqiMbmdJKUHpeLhoYKbWWVCK-YOHr516YYkAX_LR0JsS0xXO9PIhNWW4bm5Md5AJMPW7NIqOv6RwH1JlM"),
+                new TemplateInfo("Tabriknoma 3", "https://lh5.googleusercontent.com/proxy/z14mlq_5C4Lj2UUvQd2xTK6t-wRhImOBalhN8x8207FWsxSnFS_cfdrr2TEYBwji9PGcQR7VvcoMqCgGnEoZkc7FegCe5BVqiMbmdJKUHpeLhoYKbWWVCK-YOHr516YYkAX_LR0JsS0xXO9PIhNWW4bm5Md5AJMPW7NIqOv6RwH1JlM")
+        ));
+    }
 }
-

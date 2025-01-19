@@ -1,11 +1,13 @@
 package com.taklifnoma.taklifnomalar.bot;
 
-import lombok.Getter;
-import lombok.AllArgsConstructor;
-
 public class TemplateInfo {
     private String name;
     private String previewUrl;
+
+    public TemplateInfo(String name, String previewUrl) {
+        this.name = name;
+        this.previewUrl = previewUrl;
+    }
 
     public String getName() {
         return name;
@@ -23,11 +25,5 @@ public class TemplateInfo {
         this.previewUrl = previewUrl;
     }
 
-    public TemplateInfo() {
-    }
 
-    public TemplateInfo(String name, String previewUrl) {
-        this.name = name;
-        this.previewUrl = previewUrl;
-    }
 }
